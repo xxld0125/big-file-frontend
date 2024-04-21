@@ -30,7 +30,8 @@
 </template>
 <script lang="js" setup>
 import { ref, inject } from 'vue';
-import { splitFileChunk, calFileHash } from '../../utils/file';
+import { splitFileChunk, calFileHash, concurrentProcess } from '../../utils/file';
+import { findFile, saveChunk, merge } from '@/api';
 
 const $message = inject('$message');
 
@@ -63,22 +64,47 @@ const chooseFileHandler = e => {
 
 // 上传文件
 const uploadFile = async file => {
-  console.log('start upload file', file);
-
   // 1.对文件进行切片
   const fileChunkList = splitFileChunk(file);
-  console.log(fileChunkList);
 
   // 2.计算文件hash
   const hash = await calFileHash(fileChunkList);
-  console.log(hash);
 
-  // TODO: 3.查询文件是否已经上传
+  // 3.查询文件是否已经上传
+  const { data: isExist } = await findFile({
+    hash
+  });
 
-  // TODO: 4.并发上传文件分片
+  if (isExist) {
+    file.uploaded = true;
+    file.uploading = false;
 
-  // TODO: 5.上传结束后通知服务端合并文件
+    return;
+  }
+
+  // 4.并发上传文件分片
+  await saveChunks(fileChunkList, hash);
 };
+
+async function saveChunks(pieces, hash) {
+  const tasks = pieces.map((piece, i) => {
+    return async () => {
+      const { exists } = await findFile({ hash, index: i });
+      if (!exists) {
+        const formData = new FormData();
+        formData.append('hash', hash);
+        formData.append('index', i);
+        formData.append('chunk', piece);
+        return await saveChunk(formData);
+      }
+    };
+  });
+  // 5.上传结束后通知服务端合并文件
+  const doneHandler = () => {
+    merge({ hash });
+  };
+  await concurrentProcess(tasks, 5, doneHandler);
+}
 
 // 暂停上传
 const pauseUpload = () => {};
