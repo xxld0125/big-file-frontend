@@ -43,11 +43,12 @@ export const calFileHash = async fileChunkList => {
 };
 
 // 并发任务
-export const concurrentProcess = async (tasks, parallelSize = 3, doneHandler) => {
+export const concurrentProcess = async (tasks, parallelSize = 3, doneHandler, onProgress) => {
   const taskLen = tasks.length;
 
   if (tasks.length === 0) {
     doneHandler();
+    onProgress(100);
     return;
   }
 
@@ -62,6 +63,7 @@ export const concurrentProcess = async (tasks, parallelSize = 3, doneHandler) =>
         await concurrentProcess(failList, parallelSize, doneHandler);
       } else {
         doneHandler();
+        onProgress(100);
         return;
       }
     }
@@ -73,6 +75,7 @@ export const concurrentProcess = async (tasks, parallelSize = 3, doneHandler) =>
       try {
         await task();
         finish++;
+        onProgress((finish / taskLen).toFixed(2) * 100);
       } catch (error) {
         failList.push(task);
       } finally {

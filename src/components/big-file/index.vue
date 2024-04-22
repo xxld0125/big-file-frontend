@@ -7,8 +7,9 @@
         <Files />
       </el-icon>
       <div class="file-item-uploaded">
-        <div>
+        <div class="file-item-content">
           <p>{{ file.file.name }}</p>
+          <el-progress v-if="!file.uploaded && file.uploading" :percentage="file.uploadPercentage" :format="format" />
         </div>
         <div class="file-item-operate">
           <!-- 上传按钮 -->
@@ -16,12 +17,14 @@
             ><UploadFilled
           /></el-icon>
           <!-- 暂停 -->
-          <el-icon :size="24" v-else-if="!file.uploaded && file.uploading" @click="pauseUpload"><VideoPause /></el-icon>
+
+          <el-icon v-else-if="!file.uploaded && file.uploading" :size="24" @click="pauseUpload"><VideoPause /></el-icon>
+
           <template v-else>
             <!-- 上传成功 -->
-            <el-icon :size="24"><SuccessFilled /></el-icon>
+            <el-icon :size="24"><SuccessFilled style="color: #67c23a" /></el-icon>
             <!-- 删除 -->
-            <el-icon :size="24" @click="deleteFile"><Delete /></el-icon>
+            <el-icon :size="24" @click="deleteFile(key)"><Delete /></el-icon>
           </template>
         </div>
       </div>
@@ -32,6 +35,8 @@
 import { inject, reactive } from 'vue';
 import { splitFileChunk, calFileHash, concurrentProcess } from '../../utils/file';
 import { findFile, saveChunk, merge } from '@/api';
+
+const format = percentage => (percentage === 100 ? 'Full' : `${percentage}%`);
 
 const $message = inject('$message');
 
@@ -67,6 +72,10 @@ const chooseFileHandler = e => {
 
 // 上传文件
 const uploadFile = async file => {
+  file.uploaded = false;
+  file.uploading = true;
+  file.uploadPercentage = 0;
+
   // 1.对文件进行切片
   const fileChunkList = splitFileChunk(file.file);
 
@@ -81,6 +90,7 @@ const uploadFile = async file => {
   if (isExist) {
     file.uploaded = true;
     file.uploading = false;
+    file.uploadPercentage = 100;
 
     return;
   }
@@ -90,13 +100,18 @@ const uploadFile = async file => {
     await merge({ hash });
     file.uploaded = true;
     file.uploading = false;
+    file.uploadPercentage = 100;
+  };
+
+  const onProgress = progress => {
+    file.uploadPercentage = progress;
   };
 
   // 4.并发上传文件分片
-  await saveChunks(fileChunkList, hash, doneHandler);
+  await saveChunks(fileChunkList, hash, doneHandler, onProgress);
 };
 
-async function saveChunks(pieces, hash, doneHandler) {
+async function saveChunks(pieces, hash, doneHandler, onProgress) {
   const tasks = pieces.map((piece, i) => {
     return async () => {
       const { exists } = await findFile({ hash, index: i });
@@ -109,14 +124,16 @@ async function saveChunks(pieces, hash, doneHandler) {
       }
     };
   });
-  await concurrentProcess(tasks, 5, doneHandler);
+  await concurrentProcess(tasks, 5, doneHandler, onProgress);
 }
 
 // 暂停上传
 const pauseUpload = () => {};
 
 // 删除文件
-const deleteFile = () => {};
+const deleteFile = index => {
+  fileList.splice(index, 1);
+};
 </script>
 <style lang="css">
 .ml-3 {
@@ -134,8 +151,12 @@ const deleteFile = () => {};
 .file-item-uploaded {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   width: 100%;
   margin: 0 10px;
+}
+.file-item-operate {
+  width: 80px;
 }
 .file-item-operate > i {
   margin: 0 5px;
@@ -143,5 +164,9 @@ const deleteFile = () => {};
 
 .file {
   width: 70px;
+}
+
+.file-item-content {
+  width: 100%;
 }
 </style>
