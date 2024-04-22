@@ -8,7 +8,7 @@
       </el-icon>
       <div class="file-item-uploaded">
         <div>
-          <p>{{ file.name }}</p>
+          <p>{{ file.file.name }}</p>
         </div>
         <div class="file-item-operate">
           <!-- 上传按钮 -->
@@ -29,13 +29,13 @@
   </div>
 </template>
 <script lang="js" setup>
-import { ref, inject } from 'vue';
+import { inject, reactive } from 'vue';
 import { splitFileChunk, calFileHash, concurrentProcess } from '../../utils/file';
 import { findFile, saveChunk, merge } from '@/api';
 
 const $message = inject('$message');
 
-const fileList = ref([]);
+const fileList = reactive([]);
 
 const props = defineProps({
   maxNumber: {
@@ -49,23 +49,26 @@ const props = defineProps({
 });
 
 const chooseFileHandler = e => {
-  const fileValue = fileList.value || [];
-
   const files = e.target.files;
 
-  if (fileValue.length + files.length > props.maxNumber) {
+  if (fileList.length + files.length > props.maxNumber) {
     $message.error('超出上传数量限制');
     return;
   }
 
-  fileValue.push(...files);
-  console.error('==fileValue', fileValue);
+  fileList.push(
+    ...Array.from(files, file =>
+      reactive({
+        file: file
+      })
+    )
+  );
 };
 
 // 上传文件
 const uploadFile = async file => {
   // 1.对文件进行切片
-  const fileChunkList = splitFileChunk(file);
+  const fileChunkList = splitFileChunk(file.file);
 
   // 2.计算文件hash
   const hash = await calFileHash(fileChunkList);
@@ -82,11 +85,18 @@ const uploadFile = async file => {
     return;
   }
 
+  // 5.上传结束后通知服务端合并文件
+  const doneHandler = async () => {
+    await merge({ hash });
+    file.uploaded = true;
+    file.uploading = false;
+  };
+
   // 4.并发上传文件分片
-  await saveChunks(fileChunkList, hash);
+  await saveChunks(fileChunkList, hash, doneHandler);
 };
 
-async function saveChunks(pieces, hash) {
+async function saveChunks(pieces, hash, doneHandler) {
   const tasks = pieces.map((piece, i) => {
     return async () => {
       const { exists } = await findFile({ hash, index: i });
@@ -99,10 +109,6 @@ async function saveChunks(pieces, hash) {
       }
     };
   });
-  // 5.上传结束后通知服务端合并文件
-  const doneHandler = () => {
-    merge({ hash });
-  };
   await concurrentProcess(tasks, 5, doneHandler);
 }
 
