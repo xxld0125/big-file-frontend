@@ -32,11 +32,27 @@
   </div>
 </template>
 <script lang="js" setup>
-import { inject, reactive } from 'vue';
+import { inject, reactive, onMounted } from 'vue';
 import { splitFileChunk, calFileHash, concurrentProcess } from '../../utils/file';
 import { findFile, saveChunk, merge } from '@/api';
+import IndexedDBService from '@/config/IndexedDBService';
 
 const format = percentage => (percentage === 100 ? 'Full' : `${percentage}%`);
+
+const storeName = 'filePieceStore';
+
+// 初始化indexedDB
+onMounted(async () => {
+  // 初始化indexedDB
+  const bigFileIndexedDB = new IndexedDBService('bigFileDatabase', 1);
+
+  // 初始化indexedDB 存储
+  await bigFileIndexedDB.openDB({
+    [storeName]: {
+      indexList: ['hash']
+    }
+  });
+});
 
 const $message = inject('$message');
 
