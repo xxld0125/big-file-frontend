@@ -66,12 +66,49 @@ export default class IndexedDBService {
     });
   }
 
-  // 获取单个数据
-  async getItem(storeName, key) {
+  // 批量添加/修改数据
+  async batchUpdateItem(storeName, itemList) {
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction([storeName], 'readwrite');
+      const store = transaction.objectStore(storeName);
+
+      itemList.forEach(item => {
+        const request = store.put({ ...item, timestamp: new Date().getTime() });
+        request.onerror = () => {
+          reject(false);
+        };
+      });
+
+      transaction.oncomplete = () => {
+        resolve(true);
+      };
+    });
+  }
+
+  // 通过主键获取单个数据
+  async getItemByKey(storeName, key) {
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction([storeName]);
       const store = transaction.objectStore(storeName);
-      const request = store.get(key);
+      const request = store.store(key);
+
+      request.onsuccess = event => {
+        resolve(event.target.result);
+      };
+
+      request.onerror = () => {
+        reject('Error getting items from IndexedDB');
+      };
+    });
+  }
+
+  // 通过指定索引获取数据
+  async getItemByIndex(storeName, indexKey, value) {
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction([storeName]);
+      const store = transaction.objectStore(storeName);
+      const index = store.index(indexKey);
+      const request = index.get(value);
 
       request.onsuccess = event => {
         resolve(event.target.result);
@@ -102,11 +139,12 @@ export default class IndexedDBService {
 
   // 删除数据
 
-  async delItem(storeName, key) {
+  async delItem(storeName, key, value) {
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction([storeName], 'readwrite');
       const store = transaction.objectStore(storeName);
-      const request = store.delete(key);
+      const index = store.index(key);
+      const request = index.delete(value);
 
       request.onsuccess = () => {
         resolve(false);

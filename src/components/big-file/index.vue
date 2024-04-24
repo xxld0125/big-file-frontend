@@ -35,24 +35,7 @@
 import { inject, reactive, onMounted } from 'vue';
 import { splitFileChunk, calFileHash, concurrentProcess } from '../../utils/file';
 import { findFile, saveChunk, merge } from '@/api';
-import IndexedDBService from '@/config/IndexedDBService';
-
-const format = percentage => (percentage === 100 ? 'Full' : `${percentage}%`);
-
-const storeName = 'filePieceStore';
-
-// 初始化indexedDB
-onMounted(async () => {
-  // 初始化indexedDB
-  const bigFileIndexedDB = new IndexedDBService('bigFileDatabase', 1);
-
-  // 初始化indexedDB 存储
-  await bigFileIndexedDB.openDB({
-    [storeName]: {
-      indexList: ['hash']
-    }
-  });
-});
+import IndexedDBService from '@/service/IndexedDBService';
 
 const $message = inject('$message');
 
@@ -68,6 +51,32 @@ const props = defineProps({
     default: false
   }
 });
+
+const format = percentage => (percentage === 100 ? 'Full' : `${percentage}%`);
+
+const STORE_NAME = 'filePieceStore';
+const HASH_INDEX = 'hashIndex';
+
+let bigFileIndexedDB;
+
+// 初始化indexedDB
+onMounted(async () => {
+  // 初始化indexedDB
+  bigFileIndexedDB = new IndexedDBService('bigFileDatabase', 1);
+
+  // 初始化indexedDB 存储
+  await bigFileIndexedDB.openDB({
+    [STORE_NAME]: {
+      indexList: [HASH_INDEX]
+    }
+  });
+
+  // 渲染所有上传中的上传任务()
+});
+
+// const getUploadingTask = () => {
+
+// }
 
 const chooseFileHandler = e => {
   const files = e.target.files;
@@ -111,6 +120,19 @@ const uploadFile = async file => {
     return;
   }
 
+  // 4.本地存储文件的所有切片
+  const { name, size, type } = file.file;
+  const storeFileChunkList = fileChunkList.map((chunk, i) => ({
+    chunk: chunk,
+    hash,
+    index: i,
+    [HASH_INDEX]: `${hash}_${i}`,
+    name: name,
+    size: size,
+    type: type
+  }));
+  await bigFileIndexedDB.batchUpdateItem(STORE_NAME, storeFileChunkList);
+
   // 5.上传结束后通知服务端合并文件
   const doneHandler = async () => {
     await merge({ hash });
@@ -136,7 +158,11 @@ async function saveChunks(pieces, hash, doneHandler, onProgress) {
         formData.append('hash', hash);
         formData.append('index', i);
         formData.append('chunk', piece);
-        return await saveChunk(formData);
+        await saveChunk(formData);
+
+        // 上传完切片后, 本地存储记录该切片已完成上传
+        const pieceStorageObj = await bigFileIndexedDB.getItemByIndex(STORE_NAME, HASH_INDEX, `${hash}_${i}`);
+        await bigFileIndexedDB.updateItem(STORE_NAME, { ...pieceStorageObj, uploaded: true });
       }
     };
   });
