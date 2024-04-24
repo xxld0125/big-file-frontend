@@ -120,6 +120,32 @@ export default class IndexedDBService {
     });
   }
 
+  // 通过条件批量获取数据
+  async getItemsByFilter(storeName) {
+    return new Promise(resolve => {
+      const transaction = this.db.transaction([storeName]);
+      const store = transaction.objectStore(storeName);
+
+      // 使用游标直接在对象存储上执行条件搜索
+      var request = store.openCursor();
+
+      const result = [];
+      request.onsuccess = event => {
+        var cursor = event.target.result;
+        if (cursor) {
+          result.push(cursor.value);
+
+          // 移动游标到下一个数据项
+          cursor.continue();
+        }
+      };
+
+      transaction.oncomplete = () => {
+        resolve(result);
+      };
+    });
+  }
+
   // 批量获取全部数据
   async getAllItems(storeName) {
     return new Promise((resolve, reject) => {
@@ -138,7 +164,6 @@ export default class IndexedDBService {
   }
 
   // 删除数据
-
   async delItem(storeName, key, value) {
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction([storeName], 'readwrite');
@@ -152,6 +177,34 @@ export default class IndexedDBService {
 
       request.onerror = event => {
         reject(event);
+      };
+    });
+  }
+
+  // 批量删除数据
+  async batchDelItem(storeName, key, value) {
+    return new Promise(resolve => {
+      const transaction = this.db.transaction([storeName], 'readwrite');
+      const store = transaction.objectStore(storeName);
+
+      // 使用游标直接在对象存储上执行条件搜索
+      var request = store.openCursor();
+
+      request.onsuccess = event => {
+        var cursor = event.target.result;
+        if (cursor) {
+          if (cursor.value?.[key] === value) {
+            // 删除满足条件的数据项
+            cursor.delete();
+          }
+
+          // 移动游标到下一个数据项
+          cursor.continue();
+        }
+      };
+
+      transaction.oncomplete = () => {
+        resolve(true);
       };
     });
   }

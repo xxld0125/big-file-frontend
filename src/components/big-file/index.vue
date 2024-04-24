@@ -8,16 +8,23 @@
       </el-icon>
       <div class="file-item-uploaded">
         <div class="file-item-content">
-          <p>{{ file.file.name }}</p>
-          <el-progress v-if="!file.uploaded && file.uploading" :percentage="file.uploadPercentage" :format="format" />
+          <p>{{ getFileName(file) }}</p>
+          <el-progress
+            v-if="!file.uploaded && (file.uploading || (!file.uploading && file.isPause))"
+            :percentage="file.uploadPercentage"
+            :format="format"
+          />
         </div>
         <div class="file-item-operate">
           <!-- 上传按钮 -->
-          <el-icon :size="24" v-if="!file.uploaded && !file.uploading" @click="uploadFile(file)"
+          <el-icon :size="24" v-if="!file.uploaded && !file.uploading && !file.isPause" @click="uploadFile(file)"
             ><UploadFilled
           /></el-icon>
-          <!-- 暂停 -->
-
+          <!-- 继续上传 -->
+          <el-icon v-else-if="!file.uploaded && !file.uploading && file.isPause" size="24" @click="continueUpload(file)"
+            ><VideoPlay
+          /></el-icon>
+          <!-- 暂停上传 -->
           <el-icon v-else-if="!file.uploaded && file.uploading" :size="24" @click="pauseUpload"><VideoPause /></el-icon>
 
           <template v-else>
@@ -52,6 +59,7 @@ const props = defineProps({
   }
 });
 
+// 上传进度格式化
 const format = percentage => (percentage === 100 ? 'Full' : `${percentage}%`);
 
 const STORE_NAME = 'filePieceStore';
@@ -71,12 +79,41 @@ onMounted(async () => {
     }
   });
 
-  // 渲染所有上传中的上传任务()
+  // 渲染所有上传中的上传任务
+
+  // 获取所有本地存储分片
+  const res = await bigFileIndexedDB.getAllItems(STORE_NAME);
+
+  // 将分片信息进行分组
+  const fileGroup = res.reduce((groups, item) => {
+    const hash = item.hash;
+    if (!groups[hash]) {
+      groups[hash] = [];
+    }
+    groups[hash].push(item);
+    return groups;
+  }, {});
+
+  // 渲染上传中文件
+  Object.keys(fileGroup).forEach(hash => {
+    const pieceList = fileGroup[hash];
+    const uploadedCount = pieceList.filter(p => p.uploaded).length;
+    const uploadPercentage = (uploadedCount / pieceList.length).toFixed(2) * 100;
+    fileList.push({
+      file: pieceList.map(p => p.chunk),
+      hash,
+      uploaded: false,
+      uploading: false,
+      isPause: true,
+      uploadPercentage,
+      name: pieceList.find(v => v.name).name || ''
+    });
+  });
 });
 
-// const getUploadingTask = () => {
-
-// }
+const getFileName = file => {
+  return file.file instanceof File ? file.file.name : file.name;
+};
 
 const chooseFileHandler = e => {
   const files = e.target.files;
@@ -89,16 +126,53 @@ const chooseFileHandler = e => {
   fileList.push(
     ...Array.from(files, file =>
       reactive({
-        file: file
+        file: file,
+        uploaded: false,
+        uploading: false,
+        isPause: false,
+        uploadPercentage: 0
       })
     )
   );
+};
+
+const doneHandler = async (file, hash) => {
+  // 切换上传状态
+  file.uploaded = true;
+  file.uploading = false;
+  file.uploadPercentage = 100;
+
+  // 通知服务端合并文件
+  await merge({ hash });
+
+  // 删除本地储存
+  bigFileIndexedDB.batchDelItem(STORE_NAME, 'hash', hash);
+};
+
+const continueUpload = async file => {
+  file.uploading = true;
+  file.isPause = false;
+
+  const fileChunkList = file.file;
+  const hash = file.hash;
+
+  const onProgress = progress => {
+    file.uploadPercentage = progress;
+  };
+
+  const doneHandlerFn = () => {
+    doneHandler(file, hash);
+  };
+
+  // 4.并发上传文件分片
+  await saveChunks(fileChunkList, hash, doneHandlerFn, onProgress);
 };
 
 // 上传文件
 const uploadFile = async file => {
   file.uploaded = false;
   file.uploading = true;
+  file.isPause = false;
   file.uploadPercentage = 0;
 
   // 1.对文件进行切片
@@ -134,11 +208,8 @@ const uploadFile = async file => {
   await bigFileIndexedDB.batchUpdateItem(STORE_NAME, storeFileChunkList);
 
   // 5.上传结束后通知服务端合并文件
-  const doneHandler = async () => {
-    await merge({ hash });
-    file.uploaded = true;
-    file.uploading = false;
-    file.uploadPercentage = 100;
+  const doneHandlerFn = () => {
+    doneHandler(file, hash);
   };
 
   const onProgress = progress => {
@@ -146,14 +217,15 @@ const uploadFile = async file => {
   };
 
   // 4.并发上传文件分片
-  await saveChunks(fileChunkList, hash, doneHandler, onProgress);
+  await saveChunks(fileChunkList, hash, doneHandlerFn, onProgress);
 };
 
+// 保存文件
 async function saveChunks(pieces, hash, doneHandler, onProgress) {
   const tasks = pieces.map((piece, i) => {
     return async () => {
-      const { exists } = await findFile({ hash, index: i });
-      if (!exists) {
+      const { data: isExist } = await findFile({ hash, index: i });
+      if (!isExist) {
         const formData = new FormData();
         formData.append('hash', hash);
         formData.append('index', i);
@@ -166,10 +238,14 @@ async function saveChunks(pieces, hash, doneHandler, onProgress) {
       }
     };
   });
-  await concurrentProcess(tasks, 5, doneHandler, onProgress);
+  try {
+    await concurrentProcess(tasks, 5, doneHandler, onProgress);
+  } catch (error) {
+    console.error(error);
+  }
 }
 
-// 暂停上传
+// TODO:暂停上传
 const pauseUpload = () => {};
 
 // 删除文件
