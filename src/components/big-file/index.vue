@@ -25,7 +25,9 @@
             ><VideoPlay
           /></el-icon>
           <!-- 暂停上传 -->
-          <el-icon v-else-if="!file.uploaded && file.uploading" :size="24" @click="pauseUpload"><VideoPause /></el-icon>
+          <el-icon v-else-if="!file.uploaded && file.uploading" :size="24" @click="pauseUpload(file)"
+            ><VideoPause
+          /></el-icon>
 
           <template v-else>
             <!-- 上传成功 -->
@@ -65,9 +67,12 @@ const format = percentage => (percentage === 100 ? 'Full' : `${percentage}%`);
 const STORE_NAME = 'filePieceStore';
 const HASH_INDEX = 'hashIndex';
 
+// 初始化 indexedDB 实例
 let bigFileIndexedDB;
 
-// 初始化indexedDB
+// 初始化 AbortController 实例
+let controller;
+
 onMounted(async () => {
   // 初始化indexedDB
   bigFileIndexedDB = new IndexedDBService('bigFileDatabase', 1);
@@ -149,6 +154,12 @@ const doneHandler = async (file, hash) => {
   bigFileIndexedDB.batchDelItem(STORE_NAME, 'hash', hash);
 };
 
+const progressHandle = (file, progress) => {
+  const uploadPercentage = file.uploadPercentage;
+  file.uploadPercentage = uploadPercentage >= progress ? uploadPercentage : progress;
+};
+
+// 继续上传
 const continueUpload = async file => {
   file.uploading = true;
   file.isPause = false;
@@ -156,16 +167,20 @@ const continueUpload = async file => {
   const fileChunkList = file.file;
   const hash = file.hash;
 
-  const onProgress = progress => {
-    file.uploadPercentage = progress;
-  };
-
-  const doneHandlerFn = () => {
+  const doneHandlerFn = isAbortTask => {
+    if (isAbortTask) {
+      controller = null;
+      return;
+    }
     doneHandler(file, hash);
   };
 
+  const progressHandleFn = progress => {
+    progressHandle(file, progress);
+  };
+
   // 4.并发上传文件分片
-  await saveChunks(fileChunkList, hash, doneHandlerFn, onProgress);
+  await saveChunks(fileChunkList, hash, doneHandlerFn, progressHandleFn);
 };
 
 // 上传文件
@@ -208,29 +223,37 @@ const uploadFile = async file => {
   await bigFileIndexedDB.batchUpdateItem(STORE_NAME, storeFileChunkList);
 
   // 5.上传结束后通知服务端合并文件
-  const doneHandlerFn = () => {
+  const doneHandlerFn = isAbortTask => {
+    if (isAbortTask) {
+      controller = null;
+      return;
+    }
     doneHandler(file, hash);
   };
-
-  const onProgress = progress => {
-    file.uploadPercentage = progress;
+  const progressHandleFn = progress => {
+    progressHandle(file, progress);
   };
 
   // 4.并发上传文件分片
-  await saveChunks(fileChunkList, hash, doneHandlerFn, onProgress);
+  await saveChunks(fileChunkList, hash, doneHandlerFn, progressHandleFn);
 };
 
 // 保存文件
-async function saveChunks(pieces, hash, doneHandler, onProgress) {
+async function saveChunks(pieces, hash, doneHandler, progressHandle) {
   const tasks = pieces.map((piece, i) => {
     return async () => {
-      const { data: isExist } = await findFile({ hash, index: i });
+      if (!controller) {
+        controller = new AbortController();
+      }
+      const { signal } = controller;
+
+      const { data: isExist } = await findFile({ hash, index: i }, { signal });
       if (!isExist) {
         const formData = new FormData();
         formData.append('hash', hash);
         formData.append('index', i);
         formData.append('chunk', piece);
-        await saveChunk(formData);
+        await saveChunk(formData, { signal });
 
         // 上传完切片后, 本地存储记录该切片已完成上传
         const pieceStorageObj = await bigFileIndexedDB.getItemByIndex(STORE_NAME, HASH_INDEX, `${hash}_${i}`);
@@ -239,14 +262,22 @@ async function saveChunks(pieces, hash, doneHandler, onProgress) {
     };
   });
   try {
-    await concurrentProcess(tasks, 5, doneHandler, onProgress);
+    await concurrentProcess(tasks, 5, doneHandler, progressHandle);
   } catch (error) {
     console.error(error);
   }
 }
 
-// TODO:暂停上传
-const pauseUpload = () => {};
+// 暂停上传
+const pauseUpload = file => {
+  // 暂停上传
+  controller.abort();
+
+  // 更新上传状态
+  file.uploaded = false;
+  file.uploading = false;
+  file.isPause = true;
+};
 
 // 删除文件
 const deleteFile = index => {

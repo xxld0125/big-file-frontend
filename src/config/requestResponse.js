@@ -14,7 +14,10 @@ export function responseSuccessFunc(response) {
 }
 
 export function responseFailFunc(responseError) {
-  ElMessage({ type: 'error', message: responseError });
+  if (responseError.code !== 'ERR_CANCELED') {
+    ElMessage({ type: 'error', message: responseError });
+  }
+
   return Promise.reject(responseError);
 }
 

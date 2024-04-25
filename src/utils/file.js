@@ -56,19 +56,22 @@ export const concurrentProcess = async (tasks, parallelSize = 3, doneHandler, on
   let finish = 0; // 已完成任务数量
   let running = 0; // 正在处理的任务数量
 
+  let isAbortTask = false; // 终止任务标识
   // eslint-disable-next-line no-unused-vars
   const runNext = async () => {
-    if (finish === taskLen && running === 0) {
-      if (failList.length > 0) {
+    if (isAbortTask) {
+      return doneHandler(true);
+    } else if (finish === taskLen && running === 0) {
+      if (failList.length > 0 && !isAbortTask) {
         await concurrentProcess(failList, parallelSize, doneHandler);
       } else {
-        doneHandler();
         onProgress(100);
-        return;
+        doneHandler(isAbortTask);
       }
+      return;
     }
 
-    while (running < parallelSize && tasks.length > 0) {
+    while (running < parallelSize && tasks.length > 0 && !isAbortTask) {
       const task = tasks.shift();
       running++;
 
@@ -77,12 +80,16 @@ export const concurrentProcess = async (tasks, parallelSize = 3, doneHandler, on
         finish++;
         onProgress((finish / taskLen).toFixed(2) * 100);
       } catch (error) {
+        if (!isAbortTask && error.code === 'ERR_CANCELED') {
+          isAbortTask = true;
+        }
         failList.push(task);
       } finally {
         running--;
-        runNext();
       }
     }
+
+    runNext();
   };
 
   runNext();
