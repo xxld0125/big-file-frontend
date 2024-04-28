@@ -16,25 +16,26 @@
           />
         </div>
         <div class="file-item-operate">
-          <!-- 上传按钮 -->
-          <el-icon :size="24" v-if="!file.uploaded && !file.uploading && !file.isPause" @click="uploadFile(file)"
-            ><UploadFilled
-          /></el-icon>
-          <!-- 继续上传 -->
-          <el-icon v-else-if="!file.uploaded && !file.uploading && file.isPause" size="24" @click="continueUpload(file)"
-            ><VideoPlay
-          /></el-icon>
-          <!-- 暂停上传 -->
-          <el-icon v-else-if="!file.uploaded && file.uploading" :size="24" @click="pauseUpload(file)"
-            ><VideoPause
-          /></el-icon>
+          <template v-if="!file.uploaded">
+            <template v-if="!file.uploading">
+              <!-- 上传按钮 -->
+              <el-icon :size="24" v-if="!file.isPause" @click="uploadFile(file)"><UploadFilled /></el-icon>
+              <!-- 继续上传 -->
+              <el-icon v-else size="24" @click="continueUpload(file)"><VideoPlay /></el-icon>
+            </template>
+            <!-- 暂停上传 -->
+            <el-icon v-else :size="24" @click="pauseUpload(file)"><VideoPause /></el-icon>
+          </template>
 
           <template v-else>
             <!-- 上传成功 -->
             <el-icon :size="24"><SuccessFilled style="color: #67c23a" /></el-icon>
-            <!-- 删除 -->
-            <el-icon :size="24" @click="deleteFile(key)"><Delete /></el-icon>
           </template>
+
+          <!-- 删除上传附件/取消上传 -->
+          <el-icon v-if="file.uploaded || file.uploading || file.isPause" :size="24" @click="deleteFile(file, key)"
+            ><Delete
+          /></el-icon>
         </div>
       </div>
     </div>
@@ -43,7 +44,7 @@
 <script lang="js" setup>
 import { inject, reactive, onMounted } from 'vue';
 import { splitFileChunk, calFileHash, concurrentProcess } from '../../utils/file';
-import { findFile, saveChunk, merge } from '@/api';
+import { findFile, saveChunk, mergeChunk, deleteChunk } from '@/api';
 import IndexedDBService from '@/service/IndexedDBService';
 
 const $message = inject('$message');
@@ -104,10 +105,11 @@ onMounted(async () => {
     const pieceList = fileGroup[hash];
     const uploadedCount = pieceList.filter(p => p.uploaded).length;
     const uploadPercentage = (uploadedCount / pieceList.length).toFixed(2) * 100;
+    const uploaded = uploadedCount === pieceList.length;
     fileList.push({
       file: pieceList.map(p => p.chunk),
       hash,
-      uploaded: false,
+      uploaded,
       uploading: false,
       isPause: true,
       uploadPercentage,
@@ -148,10 +150,7 @@ const doneHandler = async (file, hash) => {
   file.uploadPercentage = 100;
 
   // 通知服务端合并文件
-  await merge({ hash });
-
-  // 删除本地储存
-  bigFileIndexedDB.batchDelItem(STORE_NAME, 'hash', hash);
+  await mergeChunk({ hash });
 };
 
 const progressHandle = (file, progress) => {
@@ -200,6 +199,8 @@ const uploadFile = async file => {
   const { data: isExist } = await findFile({
     hash
   });
+
+  file.hash = hash;
 
   if (isExist) {
     file.uploaded = true;
@@ -280,7 +281,18 @@ const pauseUpload = file => {
 };
 
 // 删除文件
-const deleteFile = index => {
+const deleteFile = (file, index) => {
+  const { uploaded, uploading, isPause, hash } = file;
+  if (uploaded || isPause || uploading) {
+    if (uploading) {
+      // 终止上传
+      controller.abort();
+    }
+    // 清除本地切片存储
+    bigFileIndexedDB.batchDelItem(STORE_NAME, 'hash', hash);
+    // 清除后端切片存储
+    deleteChunk({ hash });
+  }
   fileList.splice(index, 1);
 };
 </script>
